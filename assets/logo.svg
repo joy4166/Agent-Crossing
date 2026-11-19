@@ -1,10 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" fill="none">
-  <circle cx="64" cy="64" r="48" fill="#5EC2CC" stroke="#368F9A" stroke-width="4" />
-  <ellipse cx="64" cy="76" rx="36" ry="20" fill="#F3DF9B" stroke="#C5A34E" stroke-width="3" />
-  <ellipse cx="64" cy="73" rx="29" ry="15" fill="#63C76A" />
-  <rect x="46" y="54" width="36" height="24" rx="4" fill="#FFF9E6" stroke="#7A4F2B" stroke-width="3" />
-  <path d="M40 57L64 38L88 57H40Z" fill="#E06651" stroke="#7A3A28" stroke-width="3" stroke-linejoin="round" />
-  <rect x="59" y="64" width="10" height="14" rx="2" fill="#8C5A32" />
-  <circle cx="52" cy="63" r="3" fill="#FDE047" stroke="#7A4F2B" stroke-width="1.5" />
-  <path d="M84 34C93 34 99 40 99 49C90 49 84 43 84 34Z" fill="#4ADE80" stroke="#166534" stroke-width="2.5" stroke-linejoin="round" />
+  <circle cx="64" cy="64" r="54" fill="#4BC6D4" stroke="#2D8B98" stroke-width="4" />
+  <path d="M22 72C26 62 42 56 64 56C86 56 102 62 106 72C106 86 88 96 64 96C40 96 22 86 22 72Z" fill="#D8B76E" />
+  <ellipse cx="64" cy="70" rx="42" ry="19" fill="#F8E6AE" stroke="#C5A34E" stroke-width="2.5" />
+  <path d="M30 68C32 58 46 53 64 53C82 53 96 58 98 68V75C98 83 83 89 64 89C45 89 30 83 30 75V68Z" fill="#8C5832" stroke="#5B371B" stroke-width="2.5" />
+  <ellipse cx="64" cy="66" rx="34" ry="15" fill="#7AD05C" stroke="#53A33F" stroke-width="2" />
+  <rect x="78" y="40" width="7" height="13" rx="2" fill="#B4533C" stroke="#5B371B" stroke-width="2" />
+  <rect x="44" y="50" width="40" height="24" rx="4" fill="#FFFAF0" stroke="#5B371B" stroke-width="2.8" />
+  <path d="M38 53Q51 42 64 33Q77 42 90 53Z" fill="#E06651" stroke="#5B371B" stroke-width="2.8" stroke-linejoin="round" />
+  <path d="M58 74V65A6 6 0 0 1 70 65V74Z" fill="#8B562E" stroke="#5B371B" stroke-width="2" />
+  <rect x="48" y="56" width="7" height="7" rx="1.5" fill="#FFE26A" stroke="#5B371B" stroke-width="1.6" />
+  <rect x="73" y="56" width="7" height="7" rx="1.5" fill="#FFE26A" stroke="#5B371B" stroke-width="1.6" />
+  <path d="M88 26C98 26 105 33 105 43C95 43 88 36 88 26Z" fill="#4ADE80" stroke="#166534" stroke-width="2.6" stroke-linejoin="round" />
+  <path d="M88 26L99 37" stroke="#166534" stroke-width="2" stroke-linecap="round" />
 </svg>

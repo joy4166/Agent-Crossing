@@ -1,0 +1,7 @@
+NanumSquareRound Web Font (R, B, EB)
+Copyright (c) 2017, NAVER Corporation (http://www.naver.com),
+with Reserved Font Name Nanum, Naver Nanum, NanumSquareRound.
+
+Licensed under the SIL Open Font License, Version 1.1.
+Webfont WOFF2 distribution sourced from https://github.com/innks/NanumSquareRound
+(originally published by NAVER: http://hangeul.naver.com/2017/nanum).

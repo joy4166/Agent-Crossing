@@ -1,12 +1,12 @@
 {
   "name": "agent-village",
-  "displayName": "에이전트의 숲 (Agent Crossing)",
-  "version": "1.0.0",
-  "description": "모든 Antigravity 프로젝트의 메인·서브에이전트 활동을 0토큰으로 실시간 관전하는 2D 마을 사이드카 플러그인.",
+  "displayName": "Agent Crossing (에이전트의 숲)",
+  "version": "2.0.0",
+  "description": "Zero-token 2.5D Animal Crossing style supervisor for Antigravity, Claude Code, Cursor, and Codex agents across all local workspaces.",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
-    "에이전트의 숲 사이드카 패널 열어줘",
-    "지금 모든 프로젝트에서 에이전트들이 뭘 하고 있는지 보여줘",
-    "에이전트의 숲 마을 화면 띄워줘"
+    "Open Agent Crossing sidecar panel",
+    "Show what my Antigravity, Claude Code, Cursor, and Codex agents are working on right now",
+    "에이전트의 숲 사이드카 패널 열어줘"
   ]
 }

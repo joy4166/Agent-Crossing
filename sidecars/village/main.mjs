@@ -1,11 +1,10 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import crypto from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
-import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+import { buildVillageSnapshot, getWatchRoots } from './adapters.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,11 +12,6 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 4777;
 const HOST = '127.0.0.1';
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
-
-const TAIL_BYTES = 49152;
-const ACTIVE_RECENT_MS = 15 * 60 * 1000;
-const IDLE_COFFEE_MS = 15 * 60 * 1000;
-const TRANSCRIPT_ACTIVE_MS = 12 * 1000;
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -27,767 +21,31 @@ const MIME_TYPES = {
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.woff2': 'font/woff2',
 };
 
-function resolveAppDataDir() {
-  const execDataDir = process.env.ANTIGRAVITY_EXECUTABLE_DATA_DIR;
-  if (execDataDir) {
-    for (let d = execDataDir; d !== path.dirname(d); d = path.dirname(d)) {
-      if (path.basename(d) === 'sidecar_data') {
-        return path.dirname(d);
-      }
-    }
-  }
-  const geminiBase = path.join(os.homedir(), '.gemini');
-  for (const name of ['antigravity', 'antigravity-ide', 'antigravity-cli']) {
-    const candidate = path.join(geminiBase, name);
-    if (fs.existsSync(path.join(candidate, 'conversation_summaries.db'))) {
-      return candidate;
-    }
-  }
-  return path.join(geminiBase, 'antigravity');
-}
-
-const ANTIGRAVITY_DIR = resolveAppDataDir();
-const GEMINI_DIR = path.dirname(ANTIGRAVITY_DIR);
-const PROJECTS_DIR = fs.existsSync(path.join(GEMINI_DIR, 'config', 'projects'))
-  ? path.join(GEMINI_DIR, 'config', 'projects')
-  : path.join(os.homedir(), '.gemini', 'config', 'projects');
-const SUMMARY_DB_PATH = path.join(ANTIGRAVITY_DIR, 'conversation_summaries.db');
-const BRAIN_DIR = path.join(ANTIGRAVITY_DIR, 'brain');
-
-let dbInstance = null;
-let lastDbDiagnostic = { ok: true, missingFile: false, message: '' };
-const transcriptCache = new Map();
 const wsClients = new Set();
 let lastStateHash = '';
 let lastBroadcastAt = 0;
 let latestSnapshot = null;
 let latestSnapshotAt = 0;
 
-function normalizeUri(raw) {
-  if (!raw) return { key: '', displayPath: '' };
-  let value = String(raw).trim();
-  if (value.startsWith('[')) {
-    try {
-      const arr = JSON.parse(value);
-      value = Array.isArray(arr) && arr.length > 0 ? String(arr[0]) : '';
-    } catch {
-      // keep raw
-    }
-  }
-  if (!value) return { key: '', displayPath: '' };
-  let stripped = value.replace(/^file:\/\/\/?/i, '');
-  try {
-    stripped = decodeURIComponent(stripped);
-  } catch {
-    // ignore malformed percent encoding
-  }
-  const displayPath = stripped.replace(/\\/g, '/').replace(/\/+$/, '');
-  return {
-    key: displayPath.toLowerCase(),
-    displayPath,
-  };
-}
-
-function unwrapArg(v) {
-  if (v === undefined || v === null) return '';
-  if (typeof v !== 'string') return v;
-  const trimmed = v.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
-    (trimmed.startsWith('{') && trimmed.endsWith('}'))
-  ) {
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return v;
-    }
-  }
-  return v;
-}
-
-function safeBasename(rawPath, fallback = '') {
-  const unwrapped = unwrapArg(rawPath);
-  if (!unwrapped) return fallback;
-  if (Array.isArray(unwrapped)) {
-    return unwrapped.map((item) => String(item)).join(', ');
-  }
-  const str = String(unwrapped).replace(/\\/g, '/').replace(/\/+$/, '');
-  if (!str) return fallback;
-  const idx = str.lastIndexOf('/');
-  return idx >= 0 ? str.slice(idx + 1) || fallback : str;
-}
-
-function truncateText(text, max = 28) {
-  const clean = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!clean) return '';
-  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
-}
-
-function middleTruncate(text, max = 18) {
-  const clean = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!clean) return '';
-  if (clean.length <= max) return clean;
-  if (max <= 4) return `${clean.slice(0, Math.max(1, max - 1))}…`;
-  const head = Math.ceil((max - 1) * 0.58);
-  const tail = Math.max(3, max - 1 - head);
-  return `${clean.slice(0, head)}…${clean.slice(-tail)}`;
-}
-
-function parseTimestampMs(ts) {
-  if (!ts) return 0;
-  const normalized = String(ts).replace(' ', 'T');
-  const parsed = Date.parse(normalized);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function getDatabase() {
-  if (dbInstance) return dbInstance;
-  if (!fs.existsSync(SUMMARY_DB_PATH)) {
-    lastDbDiagnostic = { ok: true, missingFile: true, message: '' };
-    return null;
-  }
-  try {
-    dbInstance = new DatabaseSync(SUMMARY_DB_PATH, {
-      readOnly: true,
-      readBigInts: true,
-    });
-    lastDbDiagnostic = { ok: true, missingFile: false, message: '' };
-    return dbInstance;
-  } catch (err) {
-    dbInstance = null;
-    lastDbDiagnostic = {
-      ok: false,
-      missingFile: false,
-      message: truncateText(err?.message || '대화 요약 DB를 열 수 없습니다.', 120),
-    };
-    return null;
-  }
-}
-
-function resetDatabase() {
-  if (dbInstance) {
-    try {
-      dbInstance.close();
-    } catch {
-      // ignore close error
-    }
-    dbInstance = null;
-  }
-}
-
-function loadProjects() {
-  const islandsById = new Map();
-  const islandByFolderKey = new Map();
-
-  if (!fs.existsSync(PROJECTS_DIR)) {
-    return { islandsById, islandByFolderKey };
-  }
-
-  let files = [];
-  try {
-    files = fs.readdirSync(PROJECTS_DIR).filter((name) => name.endsWith('.json'));
-  } catch {
-    return { islandsById, islandByFolderKey };
-  }
-
-  for (const file of files) {
-    try {
-      const raw = fs.readFileSync(path.join(PROJECTS_DIR, file), 'utf8');
-      const data = JSON.parse(raw);
-      if (data.sidecar) continue;
-
-      const folderUri = data.projectResources?.resources?.[0]?.folderUri || '';
-      const { key: folderKey, displayPath: folderPath } = normalizeUri(folderUri);
-      const fallbackName = folderPath ? safeBasename(folderPath, data.id) : data.id;
-      const island = {
-        id: String(data.id || file.replace(/\.json$/, '')),
-        name: String(data.name || fallbackName || 'Project'),
-        folderKey,
-        folderPath,
-        isRegistered: true,
-        activeCount: 0,
-        villagerCount: 0,
-        lastActivityMs: 0,
-      };
-      islandsById.set(island.id, island);
-      if (folderKey) {
-        islandByFolderKey.set(folderKey, island);
-      }
-    } catch {
-      // skip invalid project json
-    }
-  }
-
-  return { islandsById, islandByFolderKey };
-}
-
-function mapToolToState(tool) {
-  const name = String(tool?.name || '').toLowerCase();
-  const args = tool?.args && typeof tool.args === 'object' ? tool.args : {};
-
-  if (
-    name === 'read_file' ||
-    name === 'view_file' ||
-    name === 'list_resources' ||
-    name === 'read_resource' ||
-    name === 'grep' ||
-    /^(inspect_|list_|procedure_|search_procedures|search_strings|read_|find_xrefs)/.test(name)
-  ) {
-    const target = safeBasename(args.Path || args.Uri || args.ServerName || args.DirectoryPath, name);
-    return {
-      activity: 'reading',
-      station: 'bookshelf',
-      emoji: '📖',
-      actionLabel: '코드·문서 읽는 중',
-      detail: truncateText(target, 26),
-    };
-  }
-
-  if (name === 'edit_file' || name === 'write_file') {
-    const target = safeBasename(args.Path, 'file');
-    return {
-      activity: 'crafting',
-      station: 'workbench',
-      emoji: '🔨',
-      actionLabel: 'DIY 코드 제작 중',
-      detail: truncateText(target, 26),
-    };
-  }
-
-  if (name === 'run_command' || name === 'manage_task') {
-    const summary = unwrapArg(args.toolSummary) || unwrapArg(args.CommandLine) || unwrapArg(args.Action) || '명령 실행';
-    return {
-      activity: 'command',
-      station: 'generator',
-      emoji: '⚙️',
-      actionLabel: '터미널 장치 가동 중',
-      detail: truncateText(summary, 28),
-    };
-  }
-
-  if (name === 'search_web' || name === 'search_marketplace' || name.includes('browser')) {
-    const query = unwrapArg(args.query) || unwrapArg(args.queries) || '웹 탐색';
-    return {
-      activity: 'exploring',
-      station: 'airport',
-      emoji: '🔭',
-      actionLabel: '바깥 세계 탐색 중',
-      detail: truncateText(Array.isArray(query) ? query.join(', ') : query, 28),
-    };
-  }
-
-  if (
-    name === 'invoke_subagent' ||
-    name === 'send_message' ||
-    name === 'swarm' ||
-    name === 'run_workflow' ||
-    name === 'manage_subagents'
-  ) {
-    const role = unwrapArg(args.Role) || unwrapArg(args.TypeName) || unwrapArg(args.action) || '협업';
-    return {
-      activity: 'coordinating',
-      station: 'board',
-      emoji: '📣',
-      actionLabel: '주민 에이전트 소집 중',
-      detail: truncateText(role, 26),
-    };
-  }
-
-  if (name === 'exit_plan_mode' || name === 'ask_question' || name === 'enter_plan_mode') {
-    return {
-      activity: 'planning',
-      station: 'board',
-      emoji: '📋',
-      actionLabel: '마을 계획 정리 중',
-      detail: name === 'ask_question' ? '질문 정리 중' : '설계 완료',
-    };
-  }
-
-  const fallback = unwrapArg(args.ToolName) || name || '도구 실행';
-  return {
-    activity: 'crafting',
-    station: 'workbench',
-    emoji: '✨',
-    actionLabel: '도구 작업 중',
-    detail: truncateText(fallback, 24),
-  };
-}
-
-function formatRelativeKo(ageMs) {
-  if (ageMs < 60_000) return '방금 전 활동';
-  if (ageMs < 3_600_000) return `${Math.floor(ageMs / 60_000)}분 전 활동`;
-  if (ageMs < 86_400_000) return `${Math.floor(ageMs / 3_600_000)}시간 전 활동`;
-  return `${Math.floor(ageMs / 86_400_000)}일 전 활동`;
-}
-
-function buildIdleState(ageMs) {
-  const rel = formatRelativeKo(ageMs);
-  if (ageMs < IDLE_COFFEE_MS) {
-    return {
-      activity: 'coffee',
-      station: 'home',
-      emoji: '☕',
-      actionLabel: '집 마당에서 티타임',
-      detail: rel,
-    };
-  }
-  return {
-    activity: 'sleeping',
-    station: 'home',
-    emoji: '💤',
-    actionLabel: '집에서 꿀잠 휴식 중',
-    detail: rel,
-  };
-}
-
-function extractErrorInfo(steps, errIndex) {
-  const errStep = steps[errIndex] || {};
-  let toolName = '';
-  for (let i = errIndex; i >= Math.max(0, errIndex - 2); i -= 1) {
-    const candidate = steps[i];
-    if (candidate?.type === 'PLANNER_RESPONSE' && Array.isArray(candidate.tool_calls) && candidate.tool_calls.length > 0) {
-      toolName = String(candidate.tool_calls[candidate.tool_calls.length - 1]?.name || '');
-      break;
-    }
-  }
-  const rawErr =
-    (typeof errStep.error === 'string' && errStep.error.trim()) ||
-    (typeof errStep.content === 'string' && errStep.content.trim().split(/\r?\n/)[0]) ||
-    '';
-  const cleanMsg = rawErr.replace(/\s+/g, ' ').trim();
-  const combined =
-    toolName && cleanMsg
-      ? `${toolName}: ${cleanMsg}`
-      : cleanMsg
-        ? cleanMsg
-        : toolName
-          ? `${toolName} 실행 오류`
-          : '단계 실행 오류';
-  return {
-    short: truncateText(combined, 32),
-    full: truncateText(combined, 220),
-  };
-}
-
-function readTranscriptTail(conversationId) {
-  const transcriptPath = path.join(BRAIN_DIR, conversationId, '.system_generated', 'logs', 'transcript.jsonl');
-  if (!fs.existsSync(transcriptPath)) {
-    return null;
-  }
-
-  let stat;
-  try {
-    stat = fs.statSync(transcriptPath);
-  } catch {
-    return null;
-  }
-
-  const cached = transcriptCache.get(conversationId);
-  if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
-    return cached;
-  }
-
-  const readLen = Math.min(stat.size, TAIL_BYTES);
-  const startOffset = Math.max(0, stat.size - readLen);
-  let text = '';
-  let fd;
-  try {
-    fd = fs.openSync(transcriptPath, 'r');
-    const buf = Buffer.allocUnsafe(readLen);
-    const bytesRead = fs.readSync(fd, buf, 0, readLen, startOffset);
-    text = buf.toString('utf8', 0, bytesRead);
-  } catch {
-    return null;
-  } finally {
-    if (fd !== undefined) {
-      try {
-        fs.closeSync(fd);
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  const lines = text.split(/\r?\n/);
-  if (startOffset > 0 && lines.length > 0) {
-    lines.shift();
-  }
-
-  const steps = [];
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      steps.push(JSON.parse(trimmed));
-    } catch {
-      // skip incomplete trailing line
-    }
-  }
-
-  const rawFeed = [];
-  const pushFeedItem = (time, emoji, label, baseDetail, fullDetail = '') => {
-    const prev = rawFeed[rawFeed.length - 1];
-    if (prev && prev.label === label && prev.baseDetail === baseDetail) {
-      prev.count += 1;
-      if (!prev.fullDetail && fullDetail) prev.fullDetail = fullDetail;
-      return;
-    }
-    rawFeed.push({ time, emoji, label, baseDetail, fullDetail, count: 1 });
-  };
-
-  for (let i = steps.length - 1; i >= 0 && rawFeed.length < 6; i -= 1) {
-    const step = steps[i];
-    if (step.type === 'PLANNER_RESPONSE' && Array.isArray(step.tool_calls) && step.tool_calls.length > 0) {
-      for (let j = step.tool_calls.length - 1; j >= 0 && rawFeed.length < 6; j -= 1) {
-        const mapped = mapToolToState(step.tool_calls[j]);
-        pushFeedItem(step.created_at || '', mapped.emoji, mapped.actionLabel, mapped.detail);
-      }
-    } else if (step.status === 'ERROR') {
-      const errInfo = extractErrorInfo(steps, i);
-      pushFeedItem(step.created_at || '', '💦', '오류 발생·점검 중', errInfo.short, errInfo.full);
-    }
-  }
-
-  const feed = rawFeed.map(({ time, emoji, label, baseDetail, fullDetail, count }) => ({
-    time,
-    emoji,
-    label,
-    detail: count > 1 && baseDetail ? `${baseDetail} (×${count})` : baseDetail,
-    ...(fullDetail ? { fullDetail } : {}),
-  }));
-
-  const entry = {
-    size: stat.size,
-    mtimeMs: stat.mtimeMs,
-    steps,
-    feed,
-  };
-  transcriptCache.set(conversationId, entry);
-  return entry;
-}
-
-function inspectTranscript(conversationId, isRunning, lastModifiedMs) {
-  const now = Date.now();
-  const tail = readTranscriptTail(conversationId);
-  const steps = tail?.steps || [];
-  const latest = steps.length > 0 ? steps[steps.length - 1] : null;
-  const effectiveAgeMs = Math.max(
-    0,
-    now - Math.max(lastModifiedMs || 0, tail?.mtimeMs || 0)
-  );
-
-  if (latest?.status === 'ERROR') {
-    const errInfo = extractErrorInfo(steps, steps.length - 1);
-    return {
-      state: {
-        activity: 'error',
-        station: 'generator',
-        emoji: '💦',
-        actionLabel: '오류 발생·점검 중',
-        detail: errInfo.short,
-        errorFull: errInfo.full,
-      },
-      isActive: Boolean(isRunning),
-      feed: tail?.feed || [],
-    };
-  }
-
-  const transcriptRecentlyUpdated =
-    tail &&
-    now - tail.mtimeMs < TRANSCRIPT_ACTIVE_MS &&
-    !(latest?.type === 'PLANNER_RESPONSE' && (!latest.tool_calls || latest.tool_calls.length === 0) && latest.status === 'DONE');
-
-  const isActive = Boolean(isRunning || transcriptRecentlyUpdated);
-
-  if (isActive) {
-    let chosenTool = null;
-
-    if (latest?.type === 'PLANNER_RESPONSE' && Array.isArray(latest.tool_calls) && latest.tool_calls.length > 0) {
-      chosenTool = latest.tool_calls[latest.tool_calls.length - 1];
-    } else if (latest?.type === 'GENERIC' || latest?.type === 'SYSTEM_MESSAGE') {
-      for (let i = steps.length - 1; i >= 0; i -= 1) {
-        const s = steps[i];
-        if (s.type === 'USER_INPUT') break;
-        if (s.type === 'PLANNER_RESPONSE') {
-          if (Array.isArray(s.tool_calls) && s.tool_calls.length > 0 && latest.status === 'RUNNING') {
-            chosenTool = s.tool_calls[s.tool_calls.length - 1];
-          } else if (Array.isArray(s.tool_calls) && s.tool_calls.length > 0 && now - tail.mtimeMs < 4000) {
-            chosenTool = s.tool_calls[s.tool_calls.length - 1];
-          }
-          break;
-        }
-      }
-    }
-
-    if (chosenTool) {
-      return {
-        state: mapToolToState(chosenTool),
-        isActive: true,
-        feed: tail?.feed || [],
-      };
-    }
-
-    return {
-      state: {
-        activity: 'thinking',
-        station: 'board',
-        emoji: '💭',
-        actionLabel: '아이디어 구상 중',
-        detail: '생각 정리 중...',
-      },
-      isActive: true,
-      feed: tail?.feed || [],
-    };
-  }
-
-  return {
-    state: buildIdleState(effectiveAgeMs),
-    isActive: false,
-    feed: tail?.feed || [],
-  };
-}
-
-function queryConversations() {
-  const db = getDatabase();
-  if (!db) return [];
-  try {
-    const rows = db
-      .prepare(`
-        SELECT conversation_id, title, substr(preview, 1, 80) AS preview,
-               step_count, last_modified_time, workspace_uris, status,
-               project_id, agent_name, parent_conversation_id,
-               nesting_depth, not_fully_idle, killed
-        FROM conversation_summaries
-        WHERE killed = 0
-        ORDER BY last_modified_time DESC
-        LIMIT 80
-      `)
-      .all();
-
-    const result = rows.map((r) => ({
-      conversationId: String(r.conversation_id),
-      title: String(r.title || ''),
-      preview: String(r.preview || ''),
-      stepCount: Number(r.step_count || 0),
-      lastModifiedTime: String(r.last_modified_time || ''),
-      lastModifiedMs: parseTimestampMs(r.last_modified_time),
-      workspaceUris: String(r.workspace_uris || ''),
-      status: String(r.status || ''),
-      projectId: String(r.project_id || ''),
-      agentName: String(r.agent_name || ''),
-      parentConversationId: String(r.parent_conversation_id || ''),
-      nestingDepth: Number(r.nesting_depth || 0),
-      notFullyIdle: Number(r.not_fully_idle || 0),
-      killed: Number(r.killed || 0),
-    }));
-    lastDbDiagnostic = { ok: true, missingFile: false, message: '' };
-    return result;
-  } catch (err) {
-    lastDbDiagnostic = {
-      ok: false,
-      missingFile: false,
-      message: truncateText(err?.message || '대화 목록 DB 조회 오류', 120),
-    };
-    resetDatabase();
-    return [];
-  }
-}
-
-function buildSnapshot() {
-  const now = Date.now();
-  const { islandsById, islandByFolderKey } = loadProjects();
-  const conversations = queryConversations();
-
-  const resolveIsland = (conv) => {
-    if (conv.projectId && islandsById.has(conv.projectId)) {
-      return islandsById.get(conv.projectId);
-    }
-
-    const { key: folderKey, displayPath } = normalizeUri(conv.workspaceUris);
-    if (folderKey && islandByFolderKey.has(folderKey)) {
-      return islandByFolderKey.get(folderKey);
-    }
-
-    if (folderKey) {
-      const dynamicId = `dir:${folderKey}`;
-      if (!islandsById.has(dynamicId)) {
-        islandsById.set(dynamicId, {
-          id: dynamicId,
-          name: safeBasename(displayPath, 'Workspace'),
-          folderKey,
-          folderPath: displayPath,
-          isRegistered: false,
-          activeCount: 0,
-          villagerCount: 0,
-          lastActivityMs: 0,
-        });
-      }
-      return islandsById.get(dynamicId);
-    }
-
-    const freeId = 'outside-of-project';
-    if (!islandsById.has(freeId)) {
-      islandsById.set(freeId, {
-        id: freeId,
-        name: '자유 광장',
-        folderKey: '',
-        folderPath: '',
-        isRegistered: false,
-        activeCount: 0,
-        villagerCount: 0,
-        lastActivityMs: 0,
-      });
-    }
-    return islandsById.get(freeId);
-  };
-
-  const selectedConvs = [];
-  const selectedIds = new Set();
-  const mainPerIslandCount = new Map();
-  const subPerIslandCount = new Map();
-  const activeOrRecentParents = new Set();
-
-  for (const conv of conversations) {
-    const isRunning = conv.status === 'CASCADE_RUN_STATUS_RUNNING' || conv.notFullyIdle === 1;
-    const isRecent = now - conv.lastModifiedMs <= ACTIVE_RECENT_MS;
-    if (conv.nestingDepth === 0 && (isRunning || isRecent)) {
-      activeOrRecentParents.add(conv.conversationId);
-    }
-  }
-
-  for (const conv of conversations) {
-    const island = resolveIsland(conv);
-    const isRunning = conv.status === 'CASCADE_RUN_STATUS_RUNNING' || conv.notFullyIdle === 1;
-    const isRecent = now - conv.lastModifiedMs <= ACTIVE_RECENT_MS;
-
-    if (isRunning || isRecent) {
-      selectedConvs.push({ conv, island });
-      selectedIds.add(conv.conversationId);
-      if (conv.nestingDepth === 0) {
-        mainPerIslandCount.set(island.id, (mainPerIslandCount.get(island.id) || 0) + 1);
-      } else {
-        subPerIslandCount.set(island.id, (subPerIslandCount.get(island.id) || 0) + 1);
-      }
-    }
-  }
-
-  for (const conv of conversations) {
-    if (selectedIds.has(conv.conversationId)) continue;
-    const island = resolveIsland(conv);
-
-    if (conv.nestingDepth === 0) {
-      const count = mainPerIslandCount.get(island.id) || 0;
-      if (count < 2) {
-        selectedConvs.push({ conv, island });
-        selectedIds.add(conv.conversationId);
-        mainPerIslandCount.set(island.id, count + 1);
-      }
-    } else if (activeOrRecentParents.has(conv.parentConversationId)) {
-      const subCount = subPerIslandCount.get(island.id) || 0;
-      if (subCount < 2) {
-        selectedConvs.push({ conv, island });
-        selectedIds.add(conv.conversationId);
-        subPerIslandCount.set(island.id, subCount + 1);
-      }
-    }
-  }
-
-  const villagers = selectedConvs.map(({ conv, island }) => {
-    const isRunning = conv.status === 'CASCADE_RUN_STATUS_RUNNING' || conv.notFullyIdle === 1;
-    const inspected = inspectTranscript(conv.conversationId, isRunning, conv.lastModifiedMs);
-    const active = Boolean(isRunning || inspected.isActive);
-
-    island.villagerCount += 1;
-    if (active) island.activeCount += 1;
-    if (conv.lastModifiedMs > island.lastActivityMs) {
-      island.lastActivityMs = conv.lastModifiedMs;
-    }
-
-    const displayTitle = (
-      conv.nestingDepth > 0
-        ? conv.agentName || 'subagent'
-        : conv.title || conv.preview || '메인 에이전트'
-    ).replace(/\s+/g, ' ').trim();
-
-    return {
-      conversationId: conv.conversationId,
-      islandId: island.id,
-      islandName: island.name,
-      title: conv.title || conv.preview || displayTitle,
-      rawDisplayName: displayTitle,
-      displayName: middleTruncate(displayTitle, 18),
-      role: conv.nestingDepth > 0 ? conv.agentName || 'subagent' : '촌장',
-      isSubagent: conv.nestingDepth > 0,
-      parentConversationId: conv.parentConversationId,
-      stepCount: conv.stepCount,
-      status: conv.status,
-      isRunning: active,
-      lastModifiedTime: conv.lastModifiedTime,
-      lastModifiedMs: conv.lastModifiedMs,
-      activity: inspected.state.activity,
-      station: inspected.state.station,
-      emoji: inspected.state.emoji,
-      actionLabel: inspected.state.actionLabel,
-      detail: inspected.state.detail,
-      errorFull: inspected.state.errorFull || '',
-      feed: inspected.feed,
-    };
-  });
-
-  const nameBuckets = new Map();
-  for (const v of villagers) {
-    const key = `${v.islandId}\0${v.rawDisplayName}`;
-    if (!nameBuckets.has(key)) nameBuckets.set(key, []);
-    nameBuckets.get(key).push(v);
-  }
-  for (const group of nameBuckets.values()) {
-    if (group.length > 1) {
-      group.forEach((v, idx) => {
-        v.displayName = `${middleTruncate(v.rawDisplayName, 14)} #${idx + 1}`;
-      });
-    }
-    for (const v of group) {
-      delete v.rawDisplayName;
-    }
-  }
-
-  const islands = Array.from(islandsById.values())
-    .filter((isl) => isl.isRegistered || isl.villagerCount > 0)
-    .sort((a, b) => {
-      if (b.activeCount !== a.activeCount) return b.activeCount - a.activeCount;
-      if (b.lastActivityMs !== a.lastActivityMs) return b.lastActivityMs - a.lastActivityMs;
-      return a.name.localeCompare(b.name, 'ko');
-    });
-
-  const activeVillagers = villagers.filter((v) => v.isRunning).length;
-  const activeIslands = islands.filter((i) => i.activeCount > 0).length;
-
-  return {
-    timestamp: now,
-    islands,
-    villagers,
-    diagnostics: { ...lastDbDiagnostic },
-    stats: {
-      activeVillagers,
-      totalVillagers: villagers.length,
-      activeIslands,
-      totalIslands: islands.length,
-    },
-  };
-}
-
 function computeStateFingerprint(snapshot) {
   return JSON.stringify({
     diag: [snapshot.diagnostics?.ok !== false, snapshot.diagnostics?.message || ''],
-    islands: snapshot.islands.map((i) => [i.id, i.activeCount, i.villagerCount]),
+    islands: snapshot.islands.map((i) => [i.id, i.activeCount, i.villagerCount, i.fruit, i.sources]),
     villagers: snapshot.villagers.map((v) => [
       v.conversationId,
+      v.agentSource,
+      v.displayName,
+      v.species,
+      v.questTitle,
+      v.doorplateLabel,
       v.isRunning,
       v.activity,
+      v.actionKey,
       v.station,
+      v.icon,
       v.detail,
       v.errorFull,
       v.stepCount,
@@ -798,7 +56,7 @@ function computeStateFingerprint(snapshot) {
 function getFreshSnapshot() {
   const now = Date.now();
   if (!latestSnapshot || now - latestSnapshotAt > 250) {
-    latestSnapshot = buildSnapshot();
+    latestSnapshot = buildVillageSnapshot();
     latestSnapshotAt = now;
   }
   return latestSnapshot;
@@ -822,12 +80,12 @@ function openProjectFolder(islandId) {
   const snapshot = getFreshSnapshot();
   const island = snapshot.islands.find((item) => item.id === islandId);
   if (!island?.folderPath) {
-    return { ok: false, error: '이 섬에는 열 수 있는 프로젝트 폴더 경로가 없습니다.' };
+    return { ok: false, error: 'This island has no local folder path.' };
   }
 
   const resolved = path.resolve(island.folderPath);
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
-    return { ok: false, error: '디스크에서 프로젝트 폴더를 찾을 수 없습니다.' };
+    return { ok: false, error: 'Workspace folder was not found on disk.' };
   }
 
   const cmd =
@@ -918,25 +176,34 @@ if (isSidecarEnv) {
       })
   );
 
-  app.api(
-    '/styles.css',
-    () =>
-      new Response(fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8'), {
-        contentType: 'text/css; charset=utf-8',
-        headers: { 'Cache-Control': 'no-store' },
-      }),
-    'GET'
-  );
+  for (const [route, file, contentType] of [
+    ['/styles.css', 'styles.css', 'text/css; charset=utf-8'],
+    ['/i18n.js', 'i18n.js', 'application/javascript; charset=utf-8'],
+    ['/sprites.js', 'sprites.js', 'application/javascript; charset=utf-8'],
+    ['/village.js', 'village.js', 'application/javascript; charset=utf-8'],
+  ]) {
+    app.api(
+      route,
+      () =>
+        new Response(fs.readFileSync(path.join(__dirname, file), 'utf8'), {
+          contentType,
+          headers: { 'Cache-Control': 'no-store' },
+        }),
+      'GET'
+    );
+  }
 
-  app.api(
-    '/village.js',
-    () =>
-      new Response(fs.readFileSync(path.join(__dirname, 'village.js'), 'utf8'), {
-        contentType: 'application/javascript; charset=utf-8',
-        headers: { 'Cache-Control': 'no-store' },
-      }),
-    'GET'
-  );
+  for (const fontFile of ['NanumSquareRoundR.woff2', 'NanumSquareRoundB.woff2', 'NanumSquareRoundEB.woff2']) {
+    app.api(
+      `/fonts/${fontFile}`,
+      () =>
+        new Response(fs.readFileSync(path.join(__dirname, 'fonts', fontFile)), {
+          contentType: 'font/woff2',
+          headers: { 'Cache-Control': 'public, max-age=86400' },
+        }),
+      'GET'
+    );
+  }
 
   app.api('/api/health', () => ({ ok: true, mode: 'sidecar' }), 'GET');
 
@@ -1007,7 +274,7 @@ if (isSidecarEnv) {
   }
 
   function refreshAndBroadcast(force = false) {
-    const snapshot = buildSnapshot();
+    const snapshot = buildVillageSnapshot();
     latestSnapshot = snapshot;
     latestSnapshotAt = Date.now();
     const hash = computeStateFingerprint(snapshot);
@@ -1043,7 +310,12 @@ if (isSidecarEnv) {
       '/': 'index.html',
       '/index.html': 'index.html',
       '/styles.css': 'styles.css',
+      '/i18n.js': 'i18n.js',
+      '/sprites.js': 'sprites.js',
       '/village.js': 'village.js',
+      '/fonts/NanumSquareRoundR.woff2': 'fonts/NanumSquareRoundR.woff2',
+      '/fonts/NanumSquareRoundB.woff2': 'fonts/NanumSquareRoundB.woff2',
+      '/fonts/NanumSquareRoundEB.woff2': 'fonts/NanumSquareRoundEB.woff2',
     };
     const fileName = fileMap[reqPath];
     if (!fileName) {
@@ -1163,14 +435,14 @@ if (isSidecarEnv) {
   });
 
   let watchDebounce = null;
-  if (fs.existsSync(BRAIN_DIR)) {
+  for (const watchRoot of getWatchRoots()) {
     try {
-      fs.watch(BRAIN_DIR, { recursive: true }, () => {
+      fs.watch(watchRoot, { recursive: true }, () => {
         if (watchDebounce) clearTimeout(watchDebounce);
         watchDebounce = setTimeout(() => refreshAndBroadcast(false), 250);
       });
     } catch {
-      // ignore watch error
+      // ignore watch error on unsupported platforms
     }
   }
 
@@ -1178,6 +450,9 @@ if (isSidecarEnv) {
   setInterval(() => refreshAndBroadcast(false), 1000);
 
   server.listen(PORT, HOST, () => {
-    console.log(`Agent Crossing standalone server running at http://${HOST}:${PORT}`);
+    console.log(`Agent Crossing universal server running at http://${HOST}:${PORT}`);
+    if (process.env.AGENT_CROSSING_AUTO_OPEN === '1') {
+      openPopoutWindow({ port: PORT });
+    }
   });
 }

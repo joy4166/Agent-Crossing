@@ -1,15 +1,21 @@
 {
-  "name": "agent-village",
-  "version": "1.0.0",
-  "description": "Zero-token Animal Crossing style multi-project visualizer sidecar plugin for Antigravity agents",
+  "name": "agent-crossing",
+  "version": "2.0.0",
+  "description": "Zero-token 2.5D Animal Crossing style multi-agent supervisor for Antigravity, Claude Code, Cursor, and Codex",
   "type": "module",
   "private": true,
+  "bin": {
+    "agent-crossing": "./bin/agent-crossing.mjs",
+    "agent-village": "./bin/agent-crossing.mjs"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/joy4166/Agent-Crossing.git"
   },
   "scripts": {
-    "start": "node sidecars/village/main.mjs",
+    "start": "node bin/agent-crossing.mjs",
+    "open": "node bin/agent-crossing.mjs --open",
+    "test": "node tests/verify-adapters.mjs",
     "install-plugin": "node -e \"const fs=require('fs'),path=require('path'),os=require('os');const dst=path.join(os.homedir(),'.gemini','config','plugins','agent-village');fs.mkdirSync(dst,{recursive:true});fs.cpSync(process.cwd(),dst,{recursive:true,force:true,filter:s=>!s.includes('.impeccable')&&!s.includes('.git')});console.log('Installed plugin to',dst);\""
   }
 }
