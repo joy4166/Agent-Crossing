@@ -1,0 +1,23 @@
+# Dependencies & logs
+node_modules/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local UI critique / live-preview state (contains machine-local paths)
+.impeccable/
+
+# Environment & temporary files
+.env
+.env.*
+*.tmp
+*.bak
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/

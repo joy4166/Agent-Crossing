@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>에이전트의 숲 · Agent Crossing</title>
+  <script src="/preload.js"></script>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="app-shell">
+    <header id="hud">
+      <div class="hud-top">
+        <div class="hud-left">
+          <div class="brand-pill">
+            <svg class="brand-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" />
+              <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" />
+            </svg>
+            <h1 class="brand-title">에이전트의 숲</h1>
+          </div>
+          <div id="liveBadge" class="status-badge is-connecting" role="status" title="별도 LLM 호출 없이 로컬 로그만 읽어 추가 토큰이 0개 소모됩니다">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="liveBadgeText">연결 중...</span><span id="liveZeroTag" class="badge-zero hidden"> · 추가 토큰 0</span>
+          </div>
+          <button id="stopDemoBtn" class="wood-btn demo-stop-btn hidden" type="button" title="12초 시연 즉시 종료">시연 종료</button>
+          <button id="retryBtn" class="wood-btn retry-btn hidden" type="button">재시도</button>
+        </div>
+
+        <div class="hud-right">
+          <div id="statsSummary" class="hud-stats">활동 0명 · 0섬</div>
+          <button id="helpBtn" class="wood-btn" type="button" aria-expanded="false" aria-controls="helpSheet" title="마을 범례, 알림, 시연 설정">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+              <path d="M12 17h.01" />
+            </svg>
+            <span>안내</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="hud-actions" role="toolbar" aria-label="마을 보기 제어">
+        <button id="filterBtn" class="wood-btn" type="button" aria-pressed="false" title="활발한 섬(최근 15분)과 전체 섬 전환 (F)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+          </svg>
+          <span>전체 섬</span>
+        </button>
+
+        <button id="listBtn" class="wood-btn" type="button" aria-expanded="false" aria-controls="directoryDrawer" title="섬과 주민 빠른 검색·이동 목록 (/ 또는 Ctrl+K)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="8" y1="6" x2="21" y2="6" />
+            <line x1="8" y1="12" x2="21" y2="12" />
+            <line x1="8" y1="18" x2="21" y2="18" />
+            <line x1="3" y1="6" x2="3.01" y2="6" />
+            <line x1="3" y1="12" x2="3.01" y2="12" />
+            <line x1="3" y1="18" x2="3.01" y2="18" />
+          </svg>
+          <span>목록</span>
+        </button>
+
+        <button id="pipBtn" class="wood-btn accent-btn" type="button" title="독립 미니창으로 꺼내기">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M15 3h6v6" />
+            <path d="M10 14 21 3" />
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+          </svg>
+          <span>팝아웃</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="srAnnouncer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+    <div id="stageWrapper" class="stage-wrapper">
+      <main id="village-stage">
+        <canvas id="villageCanvas" tabindex="0" role="region" aria-label="에이전트의 숲 2D 멀티 프로젝트 활동 지도. 화살표로 화면 이동, 대괄호([/]) 키로 섬 순회 가능"></canvas>
+
+        <div id="canvasTooltip" class="canvas-tooltip hidden" role="tooltip"></div>
+        <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+        <div id="emptyStateCard" class="empty-state-card hidden" role="status">
+          <h2 id="emptyStateTitle">현재 활동 중인 섬이 없어요</h2>
+          <p id="emptyStateBody">최근 15분 내 작업한 프로젝트가 없습니다. 전체 섬 보기로 전환해 모든 프로젝트의 주민들을 확인하세요.</p>
+          <button id="showAllIslandsBtn" class="action-pill" type="button">전체 섬 보기</button>
+        </div>
+
+        <div class="zoom-controls" aria-label="화면 확대·축소 및 맞춤">
+          <button id="zoomInBtn" class="zoom-btn" type="button" aria-label="화면 확대" title="확대 (+)">+</button>
+          <button id="zoomOutBtn" class="zoom-btn" type="button" aria-label="화면 축소" title="축소 (-)">−</button>
+          <button id="resetViewBtn" class="zoom-btn zoom-reset-btn" type="button" aria-label="화면 맞춤 정렬" title="화면 맞춤 정렬 (R 또는 더블클릭)">맞춤</button>
+        </div>
+
+        <section id="helpSheet" class="overlay-sheet hidden" role="dialog" aria-modal="false" aria-label="마을 안내 및 설정">
+          <div class="sheet-head">
+            <h2>마을 안내 · 설정</h2>
+            <button id="closeHelpBtn" class="close-btn" type="button" aria-label="안내 닫기">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <div class="sheet-toggles">
+            <button id="notifyBtn" class="wood-btn" type="button" aria-pressed="false">
+              <span>완료·오류 알림</span>
+            </button>
+            <button id="demoBtn" class="wood-btn" type="button" aria-pressed="false">
+              <span>12초 시연</span>
+            </button>
+          </div>
+
+          <div class="legend-groups">
+            <div class="legend-group">
+              <div class="legend-group-title">주민 · 섬 상태</div>
+              <div class="legend-items">
+                <div><span aria-hidden="true">🎩</span> 촌장 (메인 에이전트)</div>
+                <div><span aria-hidden="true">🌱</span> 보조 주민 (서브에이전트)</div>
+                <div><span aria-hidden="true">🏠</span> 노랑 집 휴식 · 파랑 외출</div>
+                <div><span aria-hidden="true">★</span> 현재 열린 프로젝트·대화</div>
+              </div>
+            </div>
+            <div class="legend-group">
+              <div class="legend-group-title">코드 · 기획 광장</div>
+              <div class="legend-items">
+                <div><span aria-hidden="true">📖</span> 문서 읽기 (책장)</div>
+                <div><span aria-hidden="true">📋</span> 구상·협업 (게시판)</div>
+                <div><span aria-hidden="true">🔨</span> DIY 제작 (작업대)</div>
+              </div>
+            </div>
+            <div class="legend-group">
+              <div class="legend-group-title">실행 · 탐색 · 오류</div>
+              <div class="legend-items">
+                <div><span aria-hidden="true">⚙️</span> 터미널 실행 (발전기)</div>
+                <div><span aria-hidden="true">🔭</span> 외부 탐색 (부두·지구본)</div>
+                <div><span aria-hidden="true">💦</span> 오류 발생 (점검 필요)</div>
+              </div>
+            </div>
+          </div>
+
+          <p class="shortcut-note">
+            조작: / 또는 Ctrl+K(검색 목록) · [/] (섬 순회) · F(최근 15분 필터) · R/더블클릭(맞춤) · +/−(확대·축소) · Esc(닫기)
+          </p>
+        </section>
+
+        <section id="directoryDrawer" class="overlay-sheet hidden" role="dialog" aria-modal="false" aria-label="섬 및 주민 빠른 이동 목록">
+          <div class="sheet-head">
+            <h2>섬 · 주민 빠른 이동</h2>
+            <button id="closeListBtn" class="close-btn" type="button" aria-label="목록 닫기">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <input id="dirSearchInput" class="dir-search" type="search" placeholder="섬 또는 에이전트 이름 검색... (↑/↓ 이동, Enter 선택)" aria-label="섬 또는 에이전트 이름 검색" />
+          <div id="directoryList" class="directory-list"></div>
+        </section>
+      </main>
+
+      <aside id="inspectorCard" class="inspector-card hidden" aria-label="선택된 섬·주민 상세">
+        <div class="inspector-header">
+          <div class="inspector-title-wrap">
+            <span id="inspectorBadge" class="inspector-badge" aria-hidden="true"></span>
+            <div class="inspector-heading-group">
+              <h2 id="inspectorTitle">선택된 항목</h2>
+              <p id="inspectorSub" class="inspector-sub"></p>
+            </div>
+          </div>
+          <div class="inspector-header-btns">
+            <button id="inspectorBackBtn" class="back-pill hidden" type="button">← 섬으로</button>
+            <button id="closeInspectorBtn" class="close-btn" type="button" aria-label="상세 카드 닫기 (Esc)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div id="inspectorMeta" class="inspector-meta"></div>
+        <div id="inspectorErrorBox" class="error-detail-box hidden" role="alert"></div>
+        <div id="inspectorActions" class="inspector-actions hidden"></div>
+        <ul id="inspectorFeed" class="inspector-feed"></ul>
+      </aside>
+    </div>
+  </div>
+
+  <script src="/village.js"></script>
+</body>
+</html>
