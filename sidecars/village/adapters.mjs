@@ -302,14 +302,24 @@ function getEnvPaths() {
   };
 }
 
+export function areExperimentalAdaptersEnabled() {
+  return (
+    process.env.AGENT_CROSSING_EXPERIMENTAL_ADAPTERS === '1' ||
+    Boolean(process.env.AGENT_CROSSING_FIXTURES_DIR)
+  );
+}
+
 export function getWatchRoots() {
   const paths = getEnvPaths();
-  return [
-    paths.antigravityBrainDir,
-    path.join(paths.claudeDir, 'projects'),
-    path.join(paths.cursorDotDir, 'projects'),
-    path.join(paths.codexDir, 'sessions'),
-  ].filter((p) => p && fs.existsSync(p));
+  const roots = [paths.antigravityBrainDir];
+  if (areExperimentalAdaptersEnabled()) {
+    roots.push(
+      path.join(paths.claudeDir, 'projects'),
+      path.join(paths.cursorDotDir, 'projects'),
+      path.join(paths.codexDir, 'sessions'),
+    );
+  }
+  return roots.filter((p) => p && fs.existsSync(p));
 }
 
 export function resolveVillagerRole(isSubagent, agentName = '', title = '') {
@@ -1807,11 +1817,12 @@ function assignIslandPersonas(villagers) {
 export function buildVillageSnapshot() {
   const now = Date.now();
   const paths = getEnvPaths();
+  const experimental = areExperimentalAdaptersEnabled();
 
   const agy = collectAntigravityData(paths);
-  const claudeSessions = collectClaudeSessions(paths);
-  const cursorSessions = collectCursorSessions(paths);
-  const codexSessions = collectCodexSessions(paths);
+  const claudeSessions = experimental ? collectClaudeSessions(paths) : [];
+  const cursorSessions = experimental ? collectCursorSessions(paths) : [];
+  const codexSessions = experimental ? collectCodexSessions(paths) : [];
 
   const islandsById = new Map();
   const islandByFolderKey = new Map();
@@ -2050,6 +2061,7 @@ export function buildVillageSnapshot() {
     islands,
     villagers,
     diagnostics: { ...lastDbDiagnostic },
+    experimentalAdapters: experimental,
     sourceCounts,
     stats: {
       activeVillagers,

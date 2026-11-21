@@ -1541,6 +1541,15 @@
 
   function renderSourceFilterPills() {
     if (!dirSourceFilters) return;
+    if (!state?.experimentalAdapters) {
+      dirSourceFilters.classList.add('hidden');
+      dirSourceFilters.innerHTML = '';
+      if (activeSourceFilter !== 'all') {
+        activeSourceFilter = 'all';
+      }
+      return;
+    }
+    dirSourceFilters.classList.remove('hidden');
     dirSourceFilters.innerHTML = '';
     for (const srcId of SOURCE_IDS) {
       const btn = document.createElement('button');

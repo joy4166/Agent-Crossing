@@ -1,40 +1,35 @@
 ---
 name: agent-crossing
-description: Launch and supervise a cozy 2.5D Animal Crossing village monitor across Antigravity, Claude Code, Cursor, and OpenAI Codex workspaces with zero extra LLM tokens.
+description: Launch and supervise a cozy 2.5D Animal Crossing village monitor for Google Antigravity workspaces with zero extra LLM tokens.
 ---
 
-# Agent Crossing — Universal AI Agent Village Supervisor
+# Agent Crossing — 2.5D Antigravity Multi-Agent Supervisor
 
-Monitor all active main agents and subagents across your repositories in one calm 2.5D island diorama without consuming extra API tokens or interfering with running sessions.
+Monitor all active main agents and subagents across your Google Antigravity repositories in one calm 2.5D island diorama without consuming extra API tokens or interfering with running sessions.
 
 ## When to Use
 
 Trigger this skill when the user wants to:
-- Watch what multiple parallel agents (Antigravity, Claude Code, Cursor, Codex CLI) are doing across projects
+- Watch what multiple parallel Antigravity agents and subagents are doing across projects
 - Check whether long-running subagents or terminal builds finished, are waiting, or hit an error
 - Pop out a lightweight desk companion window to supervise agent progress while multitasking
 
 ## How It Works (Zero-Token Read-Only Watchers)
 
 - **Antigravity**: Reads `~/.gemini/antigravity/conversation_summaries.db` (read-only SQLite) and `brain/<id>/.system_generated/logs/transcript.jsonl`
-- **Claude Code**: Reads `~/.claude/projects/<slug>/*.jsonl` and nested `subagents/*.jsonl`
-- **Cursor IDE**: Reads `workspaceStorage/*/state.vscdb` (`composer.composerData`, read-only SQLite) and `~/.cursor/projects/*/agent-transcripts/*.jsonl`
-- **OpenAI Codex CLI**: Reads `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
-
-Sessions sharing the same repository folder path automatically live together as villagers on that repository's island!
+- *(Archived experimental adapters for Claude Code, Cursor IDE, and Codex CLI are preserved in `sidecars/village/adapters.mjs` and can be enabled via `--experimental-adapters`.)*
 
 ## Launching Agent Crossing
 
-1. **Standalone CLI / Universal Agents (Claude Code, Cursor, Codex, Terminal)**:
+1. **Quick Launch (Zero Clone)**:
    ```bash
-   npx agent-crossing --open --port 4777
+   npx agent-crossing --open
    ```
-   Or from the cloned repository:
+2. **Install Antigravity Sidecar Plugin**:
    ```bash
-   npm run open
+   npx agent-crossing install
    ```
-2. **Antigravity Sidecar Panel**:
-   Install via `npm run install-plugin`, then open `[Agent Crossing](sidecar://agent-village/village/)`.
+   Then open `[Agent Crossing](sidecar://agent-village/village/)` in Antigravity's sidecar pane.
 
 ## Supervisory Features in the UI
 

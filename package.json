@@ -1,21 +1,45 @@
 {
   "name": "agent-crossing",
   "version": "2.0.0",
-  "description": "Zero-token 2.5D Animal Crossing style multi-agent supervisor for Antigravity, Claude Code, Cursor, and Codex",
+  "description": "Zero-token 2.5D Animal Crossing style multi-agent supervisor for Google Antigravity",
   "type": "module",
-  "private": true,
+  "license": "MIT",
+  "keywords": [
+    "antigravity",
+    "ai-agent",
+    "multi-agent",
+    "animal-crossing",
+    "supervisor",
+    "sidecar"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "bin": {
     "agent-crossing": "./bin/agent-crossing.mjs",
     "agent-village": "./bin/agent-crossing.mjs"
   },
+  "files": [
+    "assets/",
+    "bin/",
+    "sidecars/",
+    "skills/",
+    "plugin.json",
+    "README.md",
+    "README.ko.md"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/joy4166/Agent-Crossing.git"
+  },
+  "homepage": "https://github.com/joy4166/Agent-Crossing#readme",
+  "bugs": {
+    "url": "https://github.com/joy4166/Agent-Crossing/issues"
   },
   "scripts": {
     "start": "node bin/agent-crossing.mjs",
     "open": "node bin/agent-crossing.mjs --open",
     "test": "node tests/verify-adapters.mjs",
-    "install-plugin": "node -e \"const fs=require('fs'),path=require('path'),os=require('os');const dst=path.join(os.homedir(),'.gemini','config','plugins','agent-village');fs.mkdirSync(dst,{recursive:true});fs.cpSync(process.cwd(),dst,{recursive:true,force:true,filter:s=>!s.includes('.impeccable')&&!s.includes('.git')});console.log('Installed plugin to',dst);\""
+    "install-plugin": "node bin/agent-crossing.mjs install"
   }
 }

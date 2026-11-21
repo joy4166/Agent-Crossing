@@ -263,5 +263,9 @@ try {
   } else {
     process.env.AGENT_CROSSING_FIXTURES_DIR = prevFixtures;
   }
-  fs.rmSync(tempRoot, { recursive: true, force: true });
+  try {
+    fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  } catch {
+    // Windows SQLite WAL handle may linger briefly until process exit
+  }
 }

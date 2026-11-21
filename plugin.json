@@ -2,11 +2,11 @@
   "name": "agent-village",
   "displayName": "Agent Crossing (에이전트의 숲)",
   "version": "2.0.0",
-  "description": "Zero-token 2.5D Animal Crossing style supervisor for Antigravity, Claude Code, Cursor, and Codex agents across all local workspaces.",
+  "description": "Zero-token 2.5D Animal Crossing style multi-agent supervisor for Google Antigravity workspaces.",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
     "Open Agent Crossing sidecar panel",
-    "Show what my Antigravity, Claude Code, Cursor, and Codex agents are working on right now",
+    "Show what my Antigravity agents are working on right now",
     "에이전트의 숲 사이드카 패널 열어줘"
   ]
 }
