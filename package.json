@@ -1,6 +1,6 @@
 {
   "name": "agent-crossing",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Zero-token 2.5D Animal Crossing style multi-agent supervisor for Google Antigravity",
   "type": "module",
   "license": "MIT",
